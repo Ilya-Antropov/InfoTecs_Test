@@ -134,3 +134,95 @@ func (db *DB) createInitialWallets(ctx context.Context) error {
 	}
 	return tx.Commit()
 }
+
+func (db *DB) SendMoney(ctx context.Context, from, to string, amount float64) error {
+	if amount <= 0 {
+		return fmt.Errorf("сумма перевода должна быть положительной")
+	}
+	if from == to {
+		return fmt.Errorf("нельзя переводить деньги самому себе")
+	}
+
+	txOptions := &sql.TxOptions{
+		Isolation: sql.LevelSerializable,
+		ReadOnly:  false,
+	}
+	tx, err := db.BeginTx(ctx, txOptions)
+	if err != nil {
+		return fmt.Errorf("не удалось начать транзакцию: %w", err)
+	}
+	defer tx.Rollback()
+
+	var balance float64
+	err = tx.QueryRowContext(ctx, selectBalanceForUpdateSQL, from).Scan(&balance)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrWalletNotFound
+		}
+		return fmt.Errorf("ошибка при получении баланса отправителя: %w", err)
+	}
+
+	if balance < amount {
+		return ErrInsufficientBalance
+	}
+
+	_, err = tx.ExecContext(ctx, updateSenderBalanceSQL, amount, from)
+	if err != nil {
+		return fmt.Errorf("не удалось обновить баланс отправителя: %w", err)
+	}
+
+	result, err := tx.ExecContext(ctx, updateRecipientBalanceSQL, amount, to)
+	if err != nil {
+		return fmt.Errorf("не удалось обновить баланс получателя: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return ErrRecipientNotFound
+	}
+
+	_, err = tx.ExecContext(
+		ctx,
+		insertTransactionSQL,
+		from, to, amount,
+	)
+	if err != nil {
+		return fmt.Errorf("не удалось записать транзакцию: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (db *DB) GetTransactions(ctx context.Context, count int) ([]models.Transaction, error) {
+	rows, err := db.QueryContext(ctx, getTransactionsSQL, count)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить транзакции: %w", err)
+	}
+	defer rows.Close()
+
+	var transactions []models.Transaction
+	for rows.Next() {
+		var t models.Transaction
+		err = rows.Scan(&t.ID, &t.FromAddress, &t.ToAddress, &t.Amount, &t.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка сканирования транзакции: %w", err)
+		}
+		transactions = append(transactions, t)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("ошибка после итерации по строкам: %w", err)
+	}
+	return transactions, nil
+}
+
+func (db *DB) GetWalletBalance(ctx context.Context, address string) (float64, error) {
+	var balance float64
+	err := db.QueryRowContext(ctx, getWalletBalanceSQL, address).Scan(&balance)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrWalletNotFound
+		}
+		return 0, fmt.Errorf("ошибка при получении баланса кошелька: %w", err)
+	}
+	return balance, nil
+}
