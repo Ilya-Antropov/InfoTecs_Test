@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"Infotecs/internal/models"
+	_ "github.com/lib/pq"
 )
 
 var (
@@ -34,7 +35,7 @@ const (
 		);`
 	countWalletsSQL           = "SELECT COUNT(*) FROM wallets"
 	insertWalletSQL           = "INSERT INTO wallets (address, balance) VALUES ($1, $2) ON CONFLICT DO NOTHING"
-	selectBalanceForUpdateSQL = "SELECT balance FROM wallets WHERE address = $1 FOR UPDATE"
+	selectBalanceForUpdateSQL = "SELECT balance FROM wallets WHERE address = $1 FOR UPDATE SKIP LOCKED"
 	updateSenderBalanceSQL    = "UPDATE wallets SET balance = balance - $1 WHERE address = $2"
 	updateRecipientBalanceSQL = "UPDATE wallets SET balance = balance + $1 WHERE address = $2"
 	insertTransactionSQL      = "INSERT INTO transactions (from_address, to_address, amount) VALUES ($1, $2, $3)"
